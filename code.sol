@@ -21,6 +21,7 @@ contract LoanApplication {
         uint loan_id;
         uint expiry;
         uint settlement_amount;
+        bool closed;
     }
 
     mapping (uint => Loan) loans;
@@ -62,6 +63,7 @@ contract LoanApplication {
         bid.expiry = bid_expiry;
         bid.lender = msg.sender;
         bid.settlement_amount = loan.amount + (loan.amount * bid.interest_rate * loan.time_period)/1000;
+        bid.closed = false;
     }
 
     function accept_loan(uint loan_id, uint bid_id) payable public returns (bool) {
@@ -69,6 +71,8 @@ contract LoanApplication {
         if( msg.sender != loan.borrower) {
             return false;
         }
+        require(loan.loan_status == Status.Open);
+
         Bid storage bid = loan.offered_bids[bid_id];
         if(block.number > bid.expiry) {
             // Expiry has passed
@@ -91,6 +95,8 @@ contract LoanApplication {
     function settle_loan(uint loan_id) payable public {
         Loan storage loan = loans[loan_id];
         
+        require(loan.loan_status == Status.Accepted);
+
         // Only borrower can call this function
         require(msg.sender == loan.borrower);
         Bid storage bid = loan.offered_bids[loan.accepted_bid_id];
@@ -115,11 +121,15 @@ contract LoanApplication {
         //       Free up money for the current account
         Loan storage loan = loans[loan_id];
         Bid storage bid = loan.offered_bids[bid_id];
-        
+
+        require(bid.closed == false);
+        require(loan.accepted_bid_id != bid_id);
+
         if(loan.loan_status == Status.Open) {
             if(bid.expiry < block.number) {
                 // Send the lender his money back as his loan has expired
                 bid.lender.transfer(loan.amount);
+                bid.closed = true;
                 return true;
             } else {
                 // Bid hasn't expired yet
@@ -129,6 +139,7 @@ contract LoanApplication {
             if(loan.accepted_bid_id != bid_id) {
                 // Send the lender his money back as his loan has not been accepted
                 bid.lender.transfer(loan.amount);
+                bid.closed = true;
                 return true;
             } else {
                 // The Bid has been already accepted
