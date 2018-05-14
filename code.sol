@@ -11,6 +11,7 @@ contract LoanApplication {
         uint number_of_bids;
         Status loan_status;
         address borrower;
+        uint start_block_number;
     }
 
     struct Bid {
@@ -18,7 +19,7 @@ contract LoanApplication {
         uint collateral_amount;
         address lender;
         uint loan_id;
-        uint exipry;
+        uint expiry;
         uint settlement_amount;
     }
 
@@ -45,8 +46,11 @@ contract LoanApplication {
         uint loan_id,
         uint bid_interest_rate,
         uint bid_collateral_amount,
-        uint bid_exipry) public payable returns (uint bid_id) {
+        uint bid_expiry) public payable returns (uint bid_id) {
         Loan storage loan = loans[loan_id];
+
+        // Bidder should not be the loan borrower
+        require(msg.sender != loan.borrower);
 
         // Bidder should send exactly what the borrower is asking
         require(msg.value == loan.amount);
@@ -54,9 +58,10 @@ contract LoanApplication {
         Bid storage bid = loan.offered_bids[bid_id];
         bid.interest_rate = bid_interest_rate;
         bid.collateral_amount = bid_collateral_amount;
-        bid.exipry = bid_exipry;
+        // Block number at which the bid will expire
+        bid.expiry = bid_expiry;
         bid.lender = msg.sender;
-        bid.settlement_amount = loan.amount + (loan.amount * bid.interest_rate * loan.time_period);
+        bid.settlement_amount = loan.amount + (loan.amount * bid.interest_rate * loan.time_period)/1000;
     }
 
     function accept_loan(uint loan_id, uint bid_id) payable public returns (bool) {
@@ -65,14 +70,16 @@ contract LoanApplication {
             return false;
         }
         Bid storage bid = loan.offered_bids[bid_id];
-        if(block.number > bid.exipry) {
+        if(block.number > bid.expiry) {
+            // Expiry has passed
             return false;
         }
         // Borrower should send the collateral demanded by lender
         // Note that the collateral will be stored with the contract and won't be sent to lender
         require(msg.value == bid.collateral_amount);
         loan.accepted_bid_id = bid_id;
-        
+        loan.start_block_number = block.number;
+
         // Move money to borrower
         loan.borrower.transfer(loan.amount);
         
@@ -92,7 +99,7 @@ contract LoanApplication {
         require(msg.value == bid.settlement_amount);
         
         // Time period should have passed        
-        require(block.number >= loan.time_period);
+        require(block.number >= (loan.start_block_number + loan.time_period));
         
         // Move loan + interest to lenders account and
         bid.lender.transfer(bid.settlement_amount);
@@ -110,7 +117,7 @@ contract LoanApplication {
         Bid storage bid = loan.offered_bids[bid_id];
         
         if(loan.loan_status == Status.Open) {
-            if(bid.exipry < block.number) {
+            if(bid.expiry < block.number) {
                 // Send the lender his money back as his loan has expired
                 bid.lender.transfer(loan.amount);
                 return true;
@@ -133,9 +140,47 @@ contract LoanApplication {
     function mark_default(uint loan_id) public returns (bool) {
         Loan storage loan = loans[loan_id];
         require(loan.loan_status == Status.Accepted);
-        require(loan.time_period > block.number);
+        require((loan.start_block_number + loan.time_period) > block.number);
         Bid storage accepted_bid = loan.offered_bids[loan.accepted_bid_id];
         accepted_bid.lender.transfer(accepted_bid.collateral_amount);
         loan.loan_status = Status.Default;
+    }
+    
+    function pass_block() public { }
+    
+    function get_block_number() public view returns (uint block_number) {
+        block_number = block.number;
+    }
+    
+    function get_settlement_amount(uint loan_id) public view returns(uint settlement_amount) {
+        Loan storage loan = loans[loan_id];
+        Bid storage bid = loan.offered_bids[loan.accepted_bid_id];
+        settlement_amount = bid.settlement_amount;
+    }
+    
+    function get_loan_count() public view returns(uint loan_count) {
+        loan_count = number_of_loans;
+    }
+    
+    function get_loan(uint loan_id) public view returns(uint amount, uint time_period, 
+        Status status, uint number_of_bids, address borrower, uint start_block_number) {
+        Loan storage loan = loans[loan_id];
+        amount = loan.amount;
+        time_period = loan.time_period;
+        status = loan.loan_status;
+        number_of_bids = loan.number_of_bids;
+        borrower = loan.borrower;
+        start_block_number = loan.start_block_number;
+    }
+    
+    function get_bid(uint loan_id, uint bid_id) public view returns (uint interest_rate, uint collateral_amount, 
+                    address lender, uint expiry, uint settlement_amount) {
+        Loan storage loan = loans[loan_id];
+        Bid storage bid = loan.offered_bids[bid_id];
+        interest_rate = bid.interest_rate;
+        collateral_amount = bid.collateral_amount;
+        lender = bid.lender;
+        expiry = bid.expiry;
+        settlement_amount = bid.settlement_amount;
     }
 }
